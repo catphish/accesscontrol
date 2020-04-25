@@ -1,0 +1,18 @@
+{
+    "configurations": [
+        {
+            "name": "Linux",
+            "includePath": [
+                "${workspaceFolder}/**",
+                "/home/charlie/STM32Cube/Repository/STM32Cube_FW_F4_V1.25.0/Drivers/CMSIS/Device/ST/STM32F4xx/Include",
+                "/home/charlie/STM32Cube/Repository/STM32Cube_FW_F4_V1.25.0/Drivers/CMSIS/Include"
+            ],
+            "defines": [],
+            "compilerPath": "/home/charlie/Applications/gcc-arm-none-eabi-9-2019-q4-major/bin/arm-none-eabi-gcc",
+            "cStandard": "c11",
+            "cppStandard": "c++17",
+            "intelliSenseMode": "${default}"
+        }
+    ],
+    "version": 4
+}

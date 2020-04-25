@@ -14,4 +14,3 @@ arm-none-eabi-gcc $CCOPTS -T STM32F439NIHx_FLASH.ld -Wl,--gc-sections *.o -o mai
 arm-none-eabi-objcopy -O binary main.elf main.bin
 rm *.o
 st-flash write main.bin 0x8000000
-

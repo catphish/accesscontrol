@@ -42,4 +42,8 @@ void SystemInit() {
   // Enable both timers
   TIM2->CR1 = 1;
   TIM3->CR1 = 1;
+
+  // Enable the RNG
+  RCC->AHB2ENR |= RCC_AHB2ENR_RNGEN;
+  RNG->CR = (1<<2);
 }

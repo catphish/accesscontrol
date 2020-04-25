@@ -12,3 +12,14 @@ void msleep(unsigned int delay) {
 		usleep(1000);
 	}
 }
+
+void blink(uint8_t color) {
+  if(color == 0)
+    GPIOB->ODR = (1<<0);
+  if(color == 1)
+    GPIOB->ODR = (1<<7);
+  if(color == 2)
+    GPIOB->ODR = (1<<14);
+  msleep(20);
+  GPIOB->ODR = 0;
+}

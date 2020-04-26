@@ -15,7 +15,7 @@ struct __attribute__((packed)) eth_frame_t {
   uint8_t payload[1500];
 };
 
-struct __attribute__((packed)) arp_packet_t {
+struct __attribute__((packed)) arp_message_t {
   uint16_t htype;
   uint16_t ptype;
   uint8_t hlen;
@@ -49,7 +49,7 @@ struct __attribute__((packed)) udp_datagram_t {
   uint8_t payload[1472];
 };
 
-struct __attribute__((packed)) icmp_ping_datagram_t {
+struct __attribute__((packed)) icmp_message_t {
   uint8_t type;
   uint8_t code;
   uint16_t icmp_checksum;
@@ -58,7 +58,7 @@ struct __attribute__((packed)) icmp_ping_datagram_t {
   uint8_t payload[1472];
 };
 
-struct __attribute__((packed)) dhcp_packet_t {
+struct __attribute__((packed)) dhcp_message_t {
   uint8_t op;
   uint8_t htype;
   uint8_t hlen;
@@ -78,9 +78,13 @@ struct __attribute__((packed)) dhcp_packet_t {
 
 void ethernet_init();
 void ethernet_rx();
-void ethernet_1s();
-void send_dhcp_discover();
+void ethernet_main();
+void ethernet_send_dhcp_discover();
 void ethernet_udp_tx(uint8_t * destination, uint16_t sport, uint16_t dport, uint8_t * payload, uint16_t payload_length);
-void ethernet_ip_tx(uint8_t * destination, uint8_t protocol, uint8_t * payload, uint16_t payload_length);
+void ethernet_ip_tx(volatile uint8_t * destination, uint8_t protocol, uint8_t * payload, uint16_t payload_length);
 void ethernet_tx(uint8_t * destination, uint16_t ethertype, uint8_t * payload, uint16_t payload_length);
-void handle_arp(volatile struct arp_packet_t* request);
+void ethernet_arp_rx(volatile struct arp_message_t* message);
+void ethernet_ip_rx(volatile struct ip_packet_t* packet);
+void ethernet_icmp_rx(volatile struct ip_packet_t* packet);
+void ethernet_udp_rx(volatile struct ip_packet_t* packet);
+void ethernet_dhcp_rx(volatile struct dhcp_message_t* message);

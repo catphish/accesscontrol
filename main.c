@@ -12,13 +12,7 @@ int main() {
   gpio_port_mode(GPIOB, 7,  1, 0, 0, 0);
   gpio_port_mode(GPIOB, 14, 1, 0, 0, 0);
 
-  int previous_time = 0;
   while(1) {
-    ethernet_rx();
-
-    if(TIM2->CNT > previous_time) {
-      previous_time = TIM2->CNT;
-      ethernet_1s();
-    }
+    ethernet_main();
   }
 }

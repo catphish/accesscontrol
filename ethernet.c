@@ -15,6 +15,10 @@ volatile struct eth_frame_t tx_frame[2];
 volatile struct dmadesc_t  tx_desc[2];
 volatile struct dmadesc_t* tx_desc_p;
 
+uint32_t previous_time = 0;
+uint8_t dhcp_state = 0;
+uint32_t dhcp_request_xid = 0;
+
 void ethernet_init() {
   gpio_port_mode(GPIOA, 1,  2, 11, 0, 0); // A1  - REF_CLK
   gpio_port_mode(GPIOA, 2,  2, 11, 0, 0); // A2  - MDIO
@@ -64,16 +68,31 @@ void ethernet_init() {
   ETH->MACFFR |= (1 << 31);
 }
 
+void ethernet_main() {
+  // Handle incoming frames
+  ethernet_rx();
+
+  // Maintenance tasks every 1s
+  if(TIM2->CNT > previous_time) {
+    previous_time = TIM2->CNT;
+    if(dhcp_state == 0) {
+      // DHCP is idle, start by sending a DISCOVER
+      ethernet_send_dhcp_discover();
+      return;
+    }
+  }
+}
+
 void ethernet_rx() {
   // Check whether we have an Ethernet frame waiting!
   if(!(rx_desc_p->status & (1 << 31))) {
     // Check the ethertype and escalate accordingly
     switch(NTOHS(rx_desc_p->frame->ethertype)) {
       case 0x0800:
-        // handle_ip((volatile struct ip_frame_t*)rx_desc_p->frame->payload);
+        ethernet_ip_rx((volatile struct ip_packet_t*)rx_desc_p->frame->payload);
         break;
       case 0x0806:
-        handle_arp((volatile struct arp_packet_t*)(rx_desc_p->frame->payload));
+        ethernet_arp_rx((volatile struct arp_message_t*)(rx_desc_p->frame->payload));
         break;
     }
     // Return the RX descriptor to DMA
@@ -83,51 +102,153 @@ void ethernet_rx() {
   }
 }
 
-uint8_t dhcp_state = 0;
-void ethernet_1s() {
-  // This function runs every second and takes care of regular network maintenance
-  if(dhcp_state == 0) {
-    // DHCP is idle, start by sending a DISCOVER
-    send_dhcp_discover();
-    return;
+void ethernet_arp_rx(volatile struct arp_message_t* message) {
+  // Check whether this is a request
+  if(
+      NTOHS(message->htype) == 0x0001 &&
+      NTOHS(message->ptype) == 0x0800 &&
+      message->hlen == 6 &&
+      message->plen == 4 &&
+      NTOHS(message->oper) == 0x0001
+  ){
+    // Check whether it's for us
+    if(
+        message->tpa[0] == my_ip_address[0] &&
+        message->tpa[1] == my_ip_address[1] &&
+        message->tpa[2] == my_ip_address[2] &&
+        message->tpa[3] == my_ip_address[3]
+    ){
+      // Respond to the ARP request
+      struct arp_message_t reply;
+      for(int n=0; n<6; n++) {
+        reply.tha[n] = message->sha[n];
+        reply.sha[n] = my_mac_address[n];
+      }
+      reply.htype = 0x0100;
+      reply.ptype = 0x0008;
+      reply.hlen = 6;
+      reply.plen = 4;
+      reply.oper = 0x0200;
+      for(int n=0; n<4; n++) {
+        reply.tpa[n] = message->spa[n];
+        reply.spa[n] = my_ip_address[n];
+      }
+      ethernet_tx(reply.tha, 0x0806, (void*)&reply, sizeof(reply));
+    }
   }
 }
 
-void send_dhcp_discover() {
-  struct dhcp_packet_t packet;
-  for(int n=0; n<sizeof(packet); n++)
-    ((uint8_t*)(&packet))[n] = 0;
-  packet.op = 1;
-  packet.htype = 1;
-  packet.hlen = 6;
-  packet.hops = 0;
-  packet.xid = RNG->DR;
-  packet.secs = 0;
-  packet.flags = 0;
+void ethernet_ip_rx(volatile struct ip_packet_t* packet){
+  // We're quite fussy. No header extensions, no fragments.
+  if(
+    packet->version_ihl == 0x45 &&
+    HTONS(packet->total_length) <= 1200 &&
+    (packet->flags_offset == 0x0000 || packet->flags_offset == 0x0040)
+  ) {
+    if(
+      (
+        packet->destination_address[0] == 0xff &&
+        packet->destination_address[1] == 0xff &&
+        packet->destination_address[2] == 0xff &&
+        packet->destination_address[3] == 0xff
+      ) || (
+        packet->destination_address[0] == my_ip_address[0] &&
+        packet->destination_address[1] == my_ip_address[1] &&
+        packet->destination_address[2] == my_ip_address[2] &&
+        packet->destination_address[3] == my_ip_address[3]
+      )
+    ) {
+      switch(packet->protocol) {
+        case 0x01:
+          ethernet_icmp_rx((volatile struct ip_packet_t*)packet);
+          break;
+        case 0x11:
+          ethernet_udp_rx((volatile struct ip_packet_t*)packet);
+          break;
+      }
+    }
+  }
+}
+
+void ethernet_udp_rx(volatile struct ip_packet_t* packet) {
+  volatile struct udp_datagram_t * udp = (volatile struct udp_datagram_t *)packet->payload;
+  if(NTOHS(udp->dport) == 68) {
+    ethernet_dhcp_rx((volatile struct dhcp_message_t*)(udp->payload));
+  }
+}
+
+void ethernet_icmp_rx(volatile struct ip_packet_t* packet) {
+  volatile struct icmp_message_t * icmp = (volatile struct icmp_message_t *)packet->payload;
+  if(
+    icmp->type == 8 &&
+    icmp->code == 0
+  ) {
+    // Echo request. Lets reply!
+    struct icmp_message_t reply;
+    reply.type = 0;
+    reply.code = 0;
+    reply.icmp_checksum = 0;
+    reply.id = icmp->id;
+    reply.sequence = icmp->sequence;
+    int data_length = NTOHS(packet->total_length) - 28;
+    if(data_length > 1472)
+      return;
+    for(int n=0; n<data_length; n++)
+      reply.payload[n] = icmp->payload[n];
+    ethernet_ip_tx(packet->source_address, 0x01, (void*)&reply, data_length + 28);
+  }
+}
+
+void ethernet_dhcp_rx(volatile struct dhcp_message_t* message) {
+  // See if this DHCP message is a reply to our last request
+  if(message->xid == dhcp_request_xid && message->op == 2) {
+    // Work in progress...
+    // uint8_t message_type = 0;
+    // while(1) {
+    //   message->options
+    // }
+  }
+}
+
+void ethernet_send_dhcp_discover() {
+  struct dhcp_message_t request;
+  for(int n=0; n<sizeof(request); n++)
+    ((uint8_t*)(&request))[n] = 0;
+  request.op = 1;
+  request.htype = 1;
+  request.hlen = 6;
+  request.hops = 0;
+  request.xid = dhcp_request_xid = RNG->DR;
+  request.secs = 0;
+  request.flags = HTONS(0x8000);
   for(int n=0; n<4; n++) {
-    packet.ciaddr[n] = 0;
-    packet.yiaddr[n] = 0;
-    packet.siaddr[n] = 0;
-    packet.giaddr[n] = 0;
+    request.ciaddr[n] = 0;
+    request.yiaddr[n] = 0;
+    request.siaddr[n] = 0;
+    request.giaddr[n] = 0;
   }
   for(int n=0; n<6; n++) {
-    packet.chaddr[n] = my_mac_address[n];
+    request.chaddr[n] = my_mac_address[n];
   }
-  packet.options[0] = 99;
-  packet.options[1] = 130;
-  packet.options[2] = 83;
-  packet.options[3] = 99;
+  request.options[0] = 99;
+  request.options[1] = 130;
+  request.options[2] = 83;
+  request.options[3] = 99;
 
-  packet.options[4] = 53;
-  packet.options[5] = 1;
-  packet.options[6] = 1;
+  request.options[4] = 53;
+  request.options[5] = 1;
+  request.options[6] = 1;
 
-  packet.options[7] = 0xff;
-  ethernet_udp_tx((uint8_t []){0xff, 0xff, 0xff, 0xff}, 68, 67, (uint8_t*)&packet, sizeof(packet) + 8);
+  request.options[7] = 0xff;
+  ethernet_udp_tx((uint8_t []){0xff, 0xff, 0xff, 0xff}, 68, 67, (uint8_t*)&request, sizeof(request) + 8);
 
 }
 
 void ethernet_udp_tx(uint8_t * destination, uint16_t sport, uint16_t dport, uint8_t * payload, uint16_t payload_length) {
+  // Check the length is valid
+  if(payload_length > 1472)
+    return;
+
   struct udp_datagram_t datagram;
   datagram.sport = HTONS(sport);
   datagram.dport = HTONS(dport);
@@ -138,7 +259,11 @@ void ethernet_udp_tx(uint8_t * destination, uint16_t sport, uint16_t dport, uint
   ethernet_ip_tx(destination, 17, (uint8_t*)&datagram, payload_length + 8);
 }
 
-void ethernet_ip_tx(uint8_t * destination, uint8_t protocol, uint8_t * payload, uint16_t payload_length) {
+void ethernet_ip_tx(volatile uint8_t * destination, uint8_t protocol, uint8_t * payload, uint16_t payload_length) {
+  // Check the length is valid
+  if(payload_length > 1480)
+    return;
+
   struct ip_packet_t packet;
   packet.version_ihl = 0x45;
   packet.dscp_ecn = 0;
@@ -155,7 +280,9 @@ void ethernet_ip_tx(uint8_t * destination, uint8_t protocol, uint8_t * payload, 
   for(int n=0; n<payload_length; n++)
     packet.payload[n] = payload[n];
   if(destination[0] == 0xff && destination[1] == 0xff && destination[2] == 0xff && destination[3] == 0xff)
-    ethernet_tx((uint8_t []){0xff, 0xff, 0xff, 0xff, 0xff, 0xff}, 0x0800, (uint8_t*)&packet, payload_length + 20);
+    ethernet_tx((uint8_t []){0xff,0xff,0xff,0xff,0xff,0xff}, 0x0800, (uint8_t*)&packet, payload_length + 20);
+  else
+    ethernet_tx((uint8_t []){0xdc,0x9f,0xdb,0x28,0x36,0x81}, 0x0800, (uint8_t*)&packet, payload_length + 20); // Harcoded router MAC!
 }
 
 void ethernet_tx(uint8_t * destination, uint16_t ethertype, uint8_t * payload, uint16_t payload_length) {
@@ -186,121 +313,4 @@ void ethernet_tx(uint8_t * destination, uint16_t ethertype, uint8_t * payload, u
   tx_desc_p = (volatile struct dmadesc_t*)tx_desc_p->next;
   // Wake up the DMA
   ETH->DMATPDR = 1;
-}
-
-// void handle_ip(volatile struct ip_frame_t* frame) {
-//   // We're quite fussy. No header extensions, no fragments.
-//   if(
-//     frame->version_ihl == 0x45 &&
-//     HTONS(frame->total_length) <= 1200 &&
-//     (frame->flags_offset == 0x0000 || frame->flags_offset == 0x0040) &&
-//     frame->destination_address[0] == my_ip_address[0] &&
-//     frame->destination_address[1] == my_ip_address[1] &&
-//     frame->destination_address[2] == my_ip_address[2] &&
-//     frame->destination_address[3] == my_ip_address[3]
-//   ) {
-
-//     switch(frame->protocol) {
-//       case 0x01:
-//         handle_icmp((volatile struct icmp_frame_t*)frame);
-//         break;
-//     }
-//   }
-// }
-
-// void handle_icmp(volatile struct icmp_frame_t* frame) {
-//   if(
-//     frame->type == 8 &&
-//     frame->code == 0
-//   ) {
-//     // Echo request. Lets reply.
-//     if(!(tx_desc_p->status & (1 << 31))) {
-//       // Found a spare TX descriptor, sending reply.
-//       volatile struct icmp_frame_t* reply = (volatile struct icmp_frame_t*)tx_desc_p->frame;
-
-//       reply->dst_addr[0] = frame->src_addr[0];
-//       reply->dst_addr[1] = frame->src_addr[1];
-//       reply->dst_addr[2] = frame->src_addr[2];
-//       reply->dst_addr[3] = frame->src_addr[3];
-//       reply->dst_addr[4] = frame->src_addr[4];
-//       reply->dst_addr[5] = frame->src_addr[5];
-
-//       reply->src_addr[0] = my_mac_address[0];
-//       reply->src_addr[1] = my_mac_address[1];
-//       reply->src_addr[2] = my_mac_address[2];
-//       reply->src_addr[3] = my_mac_address[3];
-//       reply->src_addr[4] = my_mac_address[4];
-//       reply->src_addr[5] = my_mac_address[5];
-//       reply->ethertype = 0x0008;
-//       reply->version_ihl = 0x45;
-//       reply->dscp_ecn = 0;
-//       reply->identification = 0;
-//       reply->flags_offset = 0;
-//       reply->ttl = 0xff;
-//       reply->protocol = 1;
-//       reply->checksum = 0;
-//       reply->total_length = frame->total_length;
-//       reply->source_address[0] = my_ip_address[0];
-//       reply->source_address[1] = my_ip_address[1];
-//       reply->source_address[2] = my_ip_address[2];
-//       reply->source_address[3] = my_ip_address[3];
-//       reply->destination_address[0] = frame->source_address[0];
-//       reply->destination_address[1] = frame->source_address[1];
-//       reply->destination_address[2] = frame->source_address[2];
-//       reply->destination_address[3] = frame->source_address[3];
-//       reply->type = 0;
-//       reply->code = 0;
-//       reply->id = frame->id;
-//       reply->sequence = frame->sequence;
-//       reply->icmp_checksum = 0;
-//       for(int n=0; n<(HTONS(frame->total_length)-28); n++)
-//         reply->payload[n] = frame->payload[n];
-
-//       // Set the length
-//       tx_desc_p->ctrl = HTONS(frame->total_length) + 14;
-//       // Populate the TX descriptor flags and return ownership to DMA
-//       tx_desc_p->status = (1 << 31) | (3<<28) | (1<<20) | (3<<22);
-//       // Increment local TX pointer
-//       tx_desc_p = (volatile struct dmadesc_t*)tx_desc_p->next;
-//       // Wake up the DMA
-//       ETH->DMATPDR = 1;
-//     }
-//   }
-// }
-
-void handle_arp(volatile struct arp_packet_t* request) {
-  // Check whether this is a request
-  if(
-      NTOHS(request->htype) == 0x0001 &&
-      NTOHS(request->ptype) == 0x0800 &&
-      request->hlen == 6 &&
-      request->plen == 4 &&
-      NTOHS(request->oper) == 0x0001
-  ){
-    // Check whether it's for us
-    if(
-        request->tpa[0] == my_ip_address[0] &&
-        request->tpa[1] == my_ip_address[1] &&
-        request->tpa[2] == my_ip_address[2] &&
-        request->tpa[3] == my_ip_address[3]
-    ){
-      // Respond to the ARP request
-      struct arp_packet_t reply;
-      for(int n=0; n<6; n++) {
-        reply.tha[n] = request->sha[n];
-        reply.sha[n] = my_mac_address[n];
-      }
-      reply.htype = 0x0100;
-      reply.ptype = 0x0008;
-      reply.hlen = 6;
-      reply.plen = 4;
-      reply.oper = 0x0200;
-      for(int n=0; n<4; n++) {
-        reply.tpa[n] = request->spa[n];
-        reply.spa[n] = my_ip_address[n];
-      }
-      ethernet_tx(reply.tha, 0x0806, (void*)&reply, sizeof(reply));
-    }
-  }
-
 }

@@ -73,13 +73,25 @@ struct __attribute__((packed)) dhcp_message_t {
   uint8_t chaddr[16];
   uint8_t sname[64];
   uint8_t file[128];
-  uint8_t options[];
+  uint8_t options[512];
+};
+
+struct __attribute__((packed)) dns_message_t {
+  uint16_t identification;
+  uint16_t flags;
+  uint16_t n_questions;
+  uint16_t n_answers;
+  uint16_t n_auth_rr;
+  uint16_t n_additional_rr;
+  uint8_t data[];
 };
 
 void ethernet_init();
 void ethernet_rx();
 void ethernet_main();
 void ethernet_send_dhcp_discover();
+void ethernet_send_gateway_arp();
+void ethernet_send_dns();
 void ethernet_udp_tx(uint8_t * destination, uint16_t sport, uint16_t dport, uint8_t * payload, uint16_t payload_length);
 void ethernet_ip_tx(volatile uint8_t * destination, uint8_t protocol, uint8_t * payload, uint16_t payload_length);
 void ethernet_tx(uint8_t * destination, uint16_t ethertype, uint8_t * payload, uint16_t payload_length);
@@ -88,3 +100,4 @@ void ethernet_ip_rx(volatile struct ip_packet_t* packet);
 void ethernet_icmp_rx(volatile struct ip_packet_t* packet);
 void ethernet_udp_rx(volatile struct ip_packet_t* packet);
 void ethernet_dhcp_rx(volatile struct dhcp_message_t* message);
+void ethernet_dns_rx(volatile struct dns_message_t* message);

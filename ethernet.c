@@ -1,10 +1,12 @@
 #include <stdint.h>
-#include <stm32f439xx.h>
-//#include <stm32f407xx.h>
+#include "board.h"
 #include "ethernet.h"
 #include "util.h"
 #include "gpio.h"
+#include <string.h>
 
+uint8_t broadcast_ip[] = {0xff,0xff,0xff,0xff};
+uint8_t broadcast_mac[] = {0xff,0xff,0xff,0xff,0xff,0xff};
 uint8_t my_ip_address[]  = { 0,0,0,0 };
 uint8_t my_mac_address[] = { 2,0,0,0,0,1 };
 uint32_t dhcp_renew = 0;
@@ -21,28 +23,32 @@ uint32_t dns_expiry = 0;
 char hostname[] = "\x05nutty\x02tk";
 int hostname_length = sizeof(hostname);
 
-volatile struct eth_frame_t rx_frame[2];
-volatile struct dmadesc_t  rx_desc[2];
-volatile struct dmadesc_t* rx_desc_p;
+struct eth_frame_t rx_frame[2];
+struct dmadesc_t  rx_desc[2];
+struct dmadesc_t* rx_desc_p;
 
-volatile struct eth_frame_t tx_frame[2];
-volatile struct dmadesc_t  tx_desc[2];
-volatile struct dmadesc_t* tx_desc_p;
+struct eth_frame_t tx_frame[2];
+struct dmadesc_t  tx_desc[2];
+struct dmadesc_t* tx_desc_p;
 
 uint32_t previous_time = 0;
 uint8_t dhcp_state = 0;
 uint32_t dhcp_request_xid = 0;
 
 void ethernet_init() {
-  // gpio_port_mode(GPIOA, 1,  2, 11, 0, 0); // A1  - REF_CLK
-  // gpio_port_mode(GPIOA, 2,  2, 11, 0, 0); // A2  - MDIO
-  // gpio_port_mode(GPIOA, 7,  2, 11, 0, 0); // A7  - CRS_DV
-  // gpio_port_mode(GPIOB, 11, 2, 11, 0, 0); // G11 - TXDEN
-  // gpio_port_mode(GPIOB, 12, 2, 11, 0, 0); // G13 - TXD0
-  // gpio_port_mode(GPIOB, 13, 2, 11, 0, 0); // B13 - TXD1
-  // gpio_port_mode(GPIOC, 1,  2, 11, 0, 0); // C1  - MDC
-  // gpio_port_mode(GPIOC, 4,  2, 11, 0, 0); // C4  - RXD0
-  // gpio_port_mode(GPIOC, 5,  2, 11, 0, 0); // C5  - RXD1
+#ifdef PROD
+  gpio_port_mode(GPIOA, 1,  2, 11, 0, 0); // A1  - REF_CLK
+  gpio_port_mode(GPIOA, 2,  2, 11, 0, 0); // A2  - MDIO
+  gpio_port_mode(GPIOA, 7,  2, 11, 0, 0); // A7  - CRS_DV
+  gpio_port_mode(GPIOB, 11, 2, 11, 0, 0); // G11 - TXDEN
+  gpio_port_mode(GPIOB, 12, 2, 11, 0, 0); // G13 - TXD0
+  gpio_port_mode(GPIOB, 13, 2, 11, 0, 0); // B13 - TXD1
+  gpio_port_mode(GPIOC, 1,  2, 11, 0, 0); // C1  - MDC
+  gpio_port_mode(GPIOC, 4,  2, 11, 0, 0); // C4  - RXD0
+  gpio_port_mode(GPIOC, 5,  2, 11, 0, 0); // C5  - RXD1
+#endif
+
+#ifdef NUCLEO
   gpio_port_mode(GPIOA, 1,  2, 11, 0, 0); // A1  - REF_CLK
   gpio_port_mode(GPIOA, 2,  2, 11, 0, 0); // A2  - MDIO
   gpio_port_mode(GPIOA, 7,  2, 11, 0, 0); // A7  - CRS_DV
@@ -52,7 +58,8 @@ void ethernet_init() {
   gpio_port_mode(GPIOC, 5,  2, 11, 0, 0); // C5  - RXD1
   gpio_port_mode(GPIOG, 11, 2, 11, 0, 0); // G11 - TXDEN
   gpio_port_mode(GPIOG, 13, 2, 11, 0, 0); // G13 - TXD0
- 
+#endif
+
   RCC->APB2ENR |= RCC_APB2ENR_SYSCFGEN;
 	SYSCFG->PMC |= (1 << 23);
   SYSCFG->CMPCR = 1;
@@ -96,25 +103,23 @@ void ethernet_main() {
   ethernet_rx();
 
   // Maintenance tasks
-  if(dhcp_expiry < TIM2->CNT) {
-    // DHCP expired, clear IP. Retry in 5 seconds.
-    my_ip_address[0] = 0; my_ip_address[1] = 0; my_ip_address[1] = 0; my_ip_address[3] = 0;
-    ethernet_send_dhcp_discover();
-    dhcp_expiry = TIM2->CNT + 5;
-    return;
-  }
-  
-  if(dhcp_renew < TIM2->CNT) {
-    // DHCP renewal due, send a new DISCOVER, retry in 120 seconds
-    dhcp_renew = TIM2->CNT + 120;
-    ethernet_send_dhcp_discover();
-    return;
-  }
 
-  if(!my_ip_address[0] && !my_ip_address[1] && !my_ip_address[2] && !my_ip_address[3]) {
-    // We don't have an IP yet. Bail out.
+  if(dhcp_renew < TIM2->CNT) {
+    // DHCP renewal due, send a new DISCOVER
+    if(dhcp_expiry < TIM2->CNT) {
+      // DHCP expired, clear IP. Retry in 5 seconds.
+      my_ip_address[0] = 0; my_ip_address[1] = 0; my_ip_address[1] = 0; my_ip_address[3] = 0;
+      dhcp_renew = TIM2->CNT + 5;
+    } else {
+      // DHCP not yet expired retry in 2 minutes
+      dhcp_renew = TIM2->CNT + 120;
+    }
+    ethernet_send_dhcp_discover();
     return;
   }
+  // If we don't have an IP yet, bail out!
+  if(!my_ip_address[0] && !my_ip_address[1] && !my_ip_address[2] && !my_ip_address[3])
+    return;
   
   if(gateway_arp_expiry < TIM2->CNT) {
     // ARP expired, fetch a new value. Retry in 2 seconds, keep the old value anyway
@@ -122,11 +127,9 @@ void ethernet_main() {
     gateway_arp_expiry = TIM2->CNT + 2;
     return;
   }
-
-  if(!gateway_mac_address[0] && !gateway_mac_address[1] && !gateway_mac_address[2] && !gateway_mac_address[3] && !gateway_mac_address[4] && !gateway_mac_address[5]) {
-    // We don't have an gateway MAC yet. Bail out.
+  // If we don't have a gateway MAC yet, bail out!
+  if(!gateway_mac_address[0] && !gateway_mac_address[1] && !gateway_mac_address[2] && !gateway_mac_address[3] && !gateway_mac_address[4] && !gateway_mac_address[5])
     return;
-  }
 
   if(dns_expiry < TIM2->CNT) {
     // DNS expired, fetch a new value, retry in 5 seconds, keep the old value anyway
@@ -134,11 +137,9 @@ void ethernet_main() {
     ethernet_send_dns();
     return;
   }
-
-  if(!server_ip_address[0] && !server_ip_address[1] && !server_ip_address[2] && !server_ip_address[3]) {
-    // We don't have DNS yet. Bail out.
+  // If we don't have DNS yet, bail out!
+  if(!server_ip_address[0] && !server_ip_address[1] && !server_ip_address[2] && !server_ip_address[3])
     return;
-  }
 
   if(TIM2->CNT > previous_time) {
     ethernet_udp_tx(server_ip_address, 1111, 2222, (uint8_t*)"hello", 5);
@@ -152,20 +153,20 @@ void ethernet_rx() {
     // Check the ethertype and escalate accordingly
     switch(NTOHS(rx_desc_p->frame->ethertype)) {
       case 0x0800:
-        ethernet_ip_rx((volatile struct ip_packet_t*)rx_desc_p->frame->payload);
+        ethernet_ip_rx((struct ip_packet_t*)rx_desc_p->frame->payload);
         break;
       case 0x0806:
-        ethernet_arp_rx((volatile struct arp_message_t*)(rx_desc_p->frame->payload));
+        ethernet_arp_rx((struct arp_message_t*)(rx_desc_p->frame->payload));
         break;
     }
     // Return the RX descriptor to DMA
     rx_desc_p->status = (1 << 31);
     // Update local RX descriptor pointer
-    rx_desc_p = (volatile struct dmadesc_t*)rx_desc_p->next;
+    rx_desc_p = (struct dmadesc_t*)rx_desc_p->next;
   }
 }
 
-void ethernet_arp_rx(volatile struct arp_message_t* message) {
+void ethernet_arp_rx(struct arp_message_t* message) {
   // Check whether this is a request
   if(
       NTOHS(message->htype) == 0x0001 &&
@@ -183,19 +184,15 @@ void ethernet_arp_rx(volatile struct arp_message_t* message) {
     ){
       // Respond to the ARP request
       struct arp_message_t reply;
-      for(int n=0; n<6; n++) {
-        reply.tha[n] = message->sha[n];
-        reply.sha[n] = my_mac_address[n];
-      }
+      memcpy(reply.tha, message->sha, 6);
+      memcpy(reply.sha, my_mac_address, 6);
       reply.htype = 0x0100;
       reply.ptype = 0x0008;
       reply.hlen = 6;
       reply.plen = 4;
       reply.oper = 0x0200;
-      for(int n=0; n<4; n++) {
-        reply.tpa[n] = message->spa[n];
-        reply.spa[n] = my_ip_address[n];
-      }
+      memcpy(reply.tpa, message->spa, 4);
+      memcpy(reply.spa, my_ip_address, 4);
       ethernet_tx(reply.tha, 0x0806, (void*)&reply, sizeof(reply));
     }
   }
@@ -209,70 +206,52 @@ void ethernet_arp_rx(volatile struct arp_message_t* message) {
       NTOHS(message->oper) == 0x0002
   ){
     // See if it has the IP of our gateway
-    if(
-      message->spa[0] == gateway_ip_address[0] &&
-      message->spa[1] == gateway_ip_address[1] &&
-      message->spa[2] == gateway_ip_address[2] &&
-      message->spa[3] == gateway_ip_address[3]
-    ) {
-      for(int n=0; n<6; n++)
-        gateway_mac_address[n] = message->sha[n];
+    if(!memcmp(message->spa, gateway_ip_address, 4)) {
+      memcpy(gateway_mac_address, message->sha, 6);
       gateway_arp_expiry = TIM2->CNT + 60;
     }
   }
 }
 
-void ethernet_ip_rx(volatile struct ip_packet_t* packet){
+void ethernet_ip_rx(struct ip_packet_t* packet){
   // We're quite fussy. No header extensions, no fragments.
   if(
     packet->version_ihl == 0x45 &&
     HTONS(packet->total_length) <= 1200 &&
     (packet->flags_offset == 0x0000 || packet->flags_offset == 0x0040)
   ) {
-    if(
-      (
-        packet->destination_address[0] == 0xff &&
-        packet->destination_address[1] == 0xff &&
-        packet->destination_address[2] == 0xff &&
-        packet->destination_address[3] == 0xff
-      ) || (
-        packet->destination_address[0] == my_ip_address[0] &&
-        packet->destination_address[1] == my_ip_address[1] &&
-        packet->destination_address[2] == my_ip_address[2] &&
-        packet->destination_address[3] == my_ip_address[3]
-      )
-    ) {
+    if(!memcmp(packet->destination_address, broadcast_ip, 4) || !memcmp(packet->destination_address, my_ip_address, 4)) {
       switch(packet->protocol) {
         case 0x01:
-          ethernet_icmp_rx((volatile struct ip_packet_t*)packet);
+          ethernet_icmp_rx((struct ip_packet_t*)packet);
           break;
         case 0x11:
-          ethernet_udp_rx((volatile struct ip_packet_t*)packet);
+          ethernet_udp_rx((struct ip_packet_t*)packet);
           break;
       }
     }
   }
 }
 
-void ethernet_udp_rx(volatile struct ip_packet_t* packet) {
-  volatile struct udp_datagram_t * udp = (volatile struct udp_datagram_t *)packet->payload;
+void ethernet_udp_rx(struct ip_packet_t* packet) {
+  struct udp_datagram_t * udp = (struct udp_datagram_t *)packet->payload;
   if(NTOHS(udp->length) > 1480)
     return;
   if(NTOHS(udp->dport) == 68) {
-    ethernet_dhcp_rx((volatile struct dhcp_message_t*)(udp->payload));
+    ethernet_dhcp_rx((struct dhcp_message_t*)(udp->payload));
   }
   if(NTOHS(udp->dport) == 5353) {
-    ethernet_dns_rx((volatile struct dns_message_t*)(udp->payload));
+    ethernet_dns_rx((struct dns_message_t*)(udp->payload));
   }
 }
 
-void ethernet_dns_rx(volatile struct dns_message_t* message) {
+void ethernet_dns_rx(struct dns_message_t* message) {
   int offset = 0;
   // We're expecting a DNS reply with exactly one question
   if(NTOHS(message->n_questions) == 1) {
-    for(int n=0;n<sizeof(hostname); n++)
-      if(message->data[offset++] != hostname[n])
-        return;
+    if(memcmp(message->data+offset, hostname, sizeof(hostname)))
+      return;
+    offset += sizeof(hostname);
     offset += 4;
     // Now look for an A record response
     for(int n=0; n<NTOHS(message->n_answers);n++) {
@@ -281,24 +260,23 @@ void ethernet_dns_rx(volatile struct dns_message_t* message) {
       if(length & 0xc0)
         offset += 2;
       else {
-        for(int n=0;n<sizeof(hostname); n++)
-          if(message->data[offset++] != hostname[n])
-            return;
+        if(memcmp(message->data+offset, hostname, sizeof(hostname)))
+          return;
+        offset += sizeof(hostname);
       }
       // TODO lots more here.
       // What if we get something that's not an A record?
       offset += 4;
       offset += 4;
       offset += 2;
-      for(int n=0;n<4;n++)
-        server_ip_address[n] = message->data[offset++];
+      memcpy(server_ip_address, message->data+offset, 4);
       dns_expiry = TIM2->CNT + 300;
     }
   }
 }
 
-void ethernet_icmp_rx(volatile struct ip_packet_t* packet) {
-  volatile struct icmp_message_t * icmp = (volatile struct icmp_message_t *)packet->payload;
+void ethernet_icmp_rx(struct ip_packet_t* packet) {
+  struct icmp_message_t * icmp = (struct icmp_message_t *)packet->payload;
   if(
     icmp->type == 8 &&
     icmp->code == 0
@@ -313,13 +291,12 @@ void ethernet_icmp_rx(volatile struct ip_packet_t* packet) {
     int data_length = NTOHS(packet->total_length) - 28;
     if(data_length > 1472)
       return;
-    for(int n=0; n<data_length; n++)
-      reply.payload[n] = icmp->payload[n];
+    memcpy(reply.payload, icmp->payload, data_length);
     ethernet_ip_tx(packet->source_address, 0x01, (void*)&reply, data_length + 28);
   }
 }
 
-void ethernet_dhcp_rx(volatile struct dhcp_message_t* message) {
+void ethernet_dhcp_rx(struct dhcp_message_t* message) {
   // See if this DHCP message is a reply to our last request
   if(message->xid == dhcp_request_xid && message->op == 2) {
     uint8_t message_type = 0;
@@ -365,8 +342,7 @@ void ethernet_dhcp_rx(volatile struct dhcp_message_t* message) {
     if(message_type == 2) {
       // Offer received, build request
       struct dhcp_message_t request;
-      for(int n=0; n<sizeof(request); n++)
-        ((uint8_t*)(&request))[n] = 0;
+      memset(&request, 0, sizeof(request));
       request.op = 1;
       request.htype = 1;
       request.hlen = 6;
@@ -374,15 +350,7 @@ void ethernet_dhcp_rx(volatile struct dhcp_message_t* message) {
       request.xid = dhcp_request_xid;
       request.secs = 0;
       request.flags = HTONS(0x8000);
-      for(int n=0; n<4; n++) {
-        request.ciaddr[n] = 0;
-        request.yiaddr[n] = 0;
-        request.siaddr[n] = 0;
-        request.giaddr[n] = 0;
-      }
-      for(int n=0; n<6; n++) {
-        request.chaddr[n] = my_mac_address[n];
-      }
+      memcpy(request.chaddr, my_mac_address, 6);
       request.options[0] = 99;
       request.options[1] = 130;
       request.options[2] = 83;
@@ -413,15 +381,13 @@ void ethernet_dhcp_rx(volatile struct dhcp_message_t* message) {
       request.options[23] = 6;
 
       request.options[24] = 0xff;
-      ethernet_udp_tx((uint8_t []){0xff, 0xff, 0xff, 0xff}, 68, 67, (uint8_t*)&request, sizeof(request) + 25);
+      ethernet_udp_tx(broadcast_ip, 68, 67, (uint8_t*)&request, sizeof(request) + 25);
     }
     if(message_type == 5) {
       // ACK received, we can now use the IP
-      for(int n=0;n<4;n++) {
-        my_ip_address[n] = message->yiaddr[n];
-        gateway_ip_address[n] = gateway[n];
-        dns_ip_address[n] = dns[n];
-      }
+      memcpy(my_ip_address, message->yiaddr, 4);
+      memcpy(gateway_ip_address, gateway, 4);
+      memcpy(dns_ip_address, dns, 4);
       dhcp_renew = TIM2->CNT + lease_time / 2;
       dhcp_expiry = TIM2->CNT + lease_time;
       gateway_arp_expiry = 0;
@@ -438,38 +404,28 @@ void ethernet_send_dns() {
   request->n_answers = HTONS(0);
   request->n_auth_rr = HTONS(0);
   request->n_additional_rr = HTONS(0);
-  for(int n=0;n<sizeof(hostname);n++)
-    request->data[n] = hostname[n];
-  request->data[sizeof(hostname)+0] = 0;
-  request->data[sizeof(hostname)+1] = 1;
-  request->data[sizeof(hostname)+2] = 0;
-  request->data[sizeof(hostname)+3] = 1;
+  memcpy(request->data, hostname, sizeof(hostname));
+  memcpy(request->data+sizeof(hostname), (uint8_t[]){0,1,0,1} , 4);
   ethernet_udp_tx(dns_ip_address, 5353, 53, (void*)request, sizeof(request_memory));
 }
 
 void ethernet_send_gateway_arp() {
   struct arp_message_t request;
-  for(int n=0; n<sizeof(request); n++)
-    ((uint8_t*)(&request))[n] = 0;
-  for(int n=0; n<6; n++) {
-    request.sha[n] = my_mac_address[n];
-  }
-  for(int n=0; n<4; n++) {
-    request.spa[n] = my_ip_address[n];
-    request.tpa[n] = gateway_ip_address[n];
-  }
+  memset(&request, 0, sizeof(request));
+  memcpy(request.sha, my_mac_address, 6);
+  memcpy(request.spa, my_ip_address, 4);
+  memcpy(request.tpa, gateway_ip_address, 4);
   request.htype = HTONS(1);
   request.ptype = HTONS(0x0800);
   request.hlen = 6;
   request.plen = 4;
   request.oper = HTONS(1);
-  ethernet_tx((uint8_t []){0xff, 0xff, 0xff, 0xff, 0xff, 0xff}, 0x0806, (void*)&request, sizeof(request));
+  ethernet_tx(broadcast_mac, 0x0806, (void*)&request, sizeof(request));
 }
 
 void ethernet_send_dhcp_discover() {
   struct dhcp_message_t request;
-  for(int n=0; n<sizeof(request); n++)
-    ((uint8_t*)(&request))[n] = 0;
+  memset(&request, 0, sizeof(request));
   request.op = 1;
   request.htype = 1;
   request.hlen = 6;
@@ -477,15 +433,7 @@ void ethernet_send_dhcp_discover() {
   request.xid = dhcp_request_xid = RNG->DR;
   request.secs = 0;
   request.flags = HTONS(0x8000);
-  for(int n=0; n<4; n++) {
-    request.ciaddr[n] = 0;
-    request.yiaddr[n] = 0;
-    request.siaddr[n] = 0;
-    request.giaddr[n] = 0;
-  }
-  for(int n=0; n<6; n++) {
-    request.chaddr[n] = my_mac_address[n];
-  }
+  memcpy(request.chaddr, my_mac_address, 6);
   request.options[0] = 99;
   request.options[1] = 130;
   request.options[2] = 83;
@@ -496,7 +444,7 @@ void ethernet_send_dhcp_discover() {
   request.options[6] = 1;
 
   request.options[7] = 0xff;
-  ethernet_udp_tx((uint8_t []){0xff, 0xff, 0xff, 0xff}, 68, 67, (void*)&request, sizeof(request) + 8);
+  ethernet_udp_tx(broadcast_ip, 68, 67, (void*)&request, sizeof(request) + 8);
 }
 
 void ethernet_udp_tx(uint8_t * destination, uint16_t sport, uint16_t dport, uint8_t * payload, uint16_t payload_length) {
@@ -509,12 +457,11 @@ void ethernet_udp_tx(uint8_t * destination, uint16_t sport, uint16_t dport, uint
   datagram.dport = HTONS(dport);
   datagram.length = HTONS(payload_length + 8);
   datagram.checksum = 0;
-  for(int n=0; n<payload_length; n++)
-    datagram.payload[n] = payload[n];
+  memcpy(datagram.payload, payload, payload_length);
   ethernet_ip_tx(destination, 17, (uint8_t*)&datagram, payload_length + 8);
 }
 
-void ethernet_ip_tx(volatile uint8_t * destination, uint8_t protocol, uint8_t * payload, uint16_t payload_length) {
+void ethernet_ip_tx(uint8_t * destination, uint8_t protocol, uint8_t * payload, uint16_t payload_length) {
   // Check the length is valid
   if(payload_length > 1480)
     return;
@@ -528,16 +475,13 @@ void ethernet_ip_tx(volatile uint8_t * destination, uint8_t protocol, uint8_t * 
   packet.ttl = 255;
   packet.protocol = protocol;
   packet.checksum = 0;
-  for(int n=0; n<4; n++) {
-    packet.source_address[n] = my_ip_address[n];
-    packet.destination_address[n] = destination[n];
-  }
-  for(int n=0; n<payload_length; n++)
-    packet.payload[n] = payload[n];
-  if(destination[0] == 0xff && destination[1] == 0xff && destination[2] == 0xff && destination[3] == 0xff)
-    ethernet_tx((uint8_t []){0xff,0xff,0xff,0xff,0xff,0xff}, 0x0800, (uint8_t*)&packet, payload_length + 20);
+  memcpy(packet.source_address, my_ip_address, 4);
+  memcpy(packet.destination_address, destination, 4);
+  memcpy(packet.payload, payload, payload_length);
+  if(!memcmp(destination, broadcast_ip, 4))
+    ethernet_tx(broadcast_mac, 0x0800, (uint8_t*)&packet, payload_length + 20);
   else
-    ethernet_tx(gateway_mac_address, 0x0800, (uint8_t*)&packet, payload_length + 20); // Harcoded router MAC!
+    ethernet_tx(gateway_mac_address, 0x0800, (uint8_t*)&packet, payload_length + 20);
 }
 
 void ethernet_tx(uint8_t * destination, uint16_t ethertype, uint8_t * payload, uint16_t payload_length) {
@@ -550,22 +494,19 @@ void ethernet_tx(uint8_t * destination, uint16_t ethertype, uint8_t * payload, u
     return;
 
   // Copy the payload into the frame
-  for(int n=0; n<payload_length; n++)
-    tx_desc_p->frame->payload[n] = payload[n];
+  memcpy(tx_desc_p->frame->payload, payload, payload_length);
   // Set the ethertype
   tx_desc_p->frame->ethertype = HTONS(ethertype);
   // Set the source and destination
-  for(int n=0; n<6; n++) {
-    tx_desc_p->frame->src_addr[n] = my_mac_address[n];
-    tx_desc_p->frame->dst_addr[n] = destination[n];
-  }
+  memcpy(tx_desc_p->frame->src_addr, my_mac_address, 6);
+  memcpy(tx_desc_p->frame->dst_addr, destination, 6);
 
   // Set the length
   tx_desc_p->ctrl = payload_length + 14;
   // Populate the TX descriptor flags and return ownership to DMA
   tx_desc_p->status = (1 << 31) | (3<<28) | (1<<20) | (3<<22);
   // Increment local TX pointer
-  tx_desc_p = (volatile struct dmadesc_t*)tx_desc_p->next;
+  tx_desc_p = (struct dmadesc_t*)tx_desc_p->next;
   // Wake up the DMA
   ETH->DMATPDR = 1;
 }

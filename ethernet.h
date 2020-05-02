@@ -4,7 +4,7 @@
 struct __attribute__((packed)) dmadesc_t {
 	uint32_t status;
 	uint32_t ctrl;
-	volatile struct eth_frame_t * frame;
+	struct eth_frame_t * frame;
 	struct dmadesc_t * next;
 };
 
@@ -93,11 +93,11 @@ void ethernet_send_dhcp_discover();
 void ethernet_send_gateway_arp();
 void ethernet_send_dns();
 void ethernet_udp_tx(uint8_t * destination, uint16_t sport, uint16_t dport, uint8_t * payload, uint16_t payload_length);
-void ethernet_ip_tx(volatile uint8_t * destination, uint8_t protocol, uint8_t * payload, uint16_t payload_length);
+void ethernet_ip_tx(uint8_t * destination, uint8_t protocol, uint8_t * payload, uint16_t payload_length);
 void ethernet_tx(uint8_t * destination, uint16_t ethertype, uint8_t * payload, uint16_t payload_length);
-void ethernet_arp_rx(volatile struct arp_message_t* message);
-void ethernet_ip_rx(volatile struct ip_packet_t* packet);
-void ethernet_icmp_rx(volatile struct ip_packet_t* packet);
-void ethernet_udp_rx(volatile struct ip_packet_t* packet);
-void ethernet_dhcp_rx(volatile struct dhcp_message_t* message);
-void ethernet_dns_rx(volatile struct dns_message_t* message);
+void ethernet_arp_rx(struct arp_message_t* message);
+void ethernet_ip_rx(struct ip_packet_t* packet);
+void ethernet_icmp_rx(struct ip_packet_t* packet);
+void ethernet_udp_rx(struct ip_packet_t* packet);
+void ethernet_dhcp_rx(struct dhcp_message_t* message);
+void ethernet_dns_rx(struct dns_message_t* message);

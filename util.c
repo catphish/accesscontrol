@@ -1,5 +1,4 @@
-#include <stm32f439xx.h>
-//#include <stm32f407xx.h>
+#include "board.h"
 
 void usleep(unsigned int delay) {
   SysTick->LOAD = 0x00FFFFFF;
@@ -14,13 +13,13 @@ void msleep(unsigned int delay) {
 	}
 }
 
-void blink(uint8_t color) {
-  if(color == 0)
-    GPIOB->ODR = (1<<0);
-  if(color == 1)
-    GPIOB->ODR = (1<<7);
-  if(color == 2)
-    GPIOB->ODR = (1<<14);
-  msleep(20);
-  GPIOB->ODR = 0;
-}
+// void blink(uint8_t color) {
+//   if(color == 0)
+//     GPIOB->ODR = (1<<0);
+//   if(color == 1)
+//     GPIOB->ODR = (1<<7);
+//   if(color == 2)
+//     GPIOB->ODR = (1<<14);
+//   msleep(20);
+//   GPIOB->ODR = 0;
+// }

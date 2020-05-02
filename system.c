@@ -1,5 +1,4 @@
-#include <stm32f439xx.h>
-//#include <stm32f407xx.h>
+#include "board.h"
 
 void SystemInitError(uint8_t error_source) {
   while(1);

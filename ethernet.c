@@ -3,6 +3,7 @@
 #include "ethernet.h"
 #include "util.h"
 #include "gpio.h"
+#include "cloud.h"
 #include <string.h>
 
 uint8_t broadcast_ip[] = {0xff,0xff,0xff,0xff};
@@ -31,11 +32,15 @@ struct eth_frame_t tx_frame[2];
 struct dmadesc_t  tx_desc[2];
 struct dmadesc_t* tx_desc_p;
 
-uint32_t previous_time = 0;
+uint32_t next_greeting = 0;
 uint8_t dhcp_state = 0;
 uint32_t dhcp_request_xid = 0;
 
 void ethernet_init() {
+  // Enable Ethernet
+  gpio_port_mode(GPIOB, 14, 1, 0, 0, 0); // Ethernet Enable
+  GPIOB->BSRR = (1<<14);
+
 #ifdef PROD
   gpio_port_mode(GPIOA, 1,  2, 11, 0, 0); // A1  - REF_CLK
   gpio_port_mode(GPIOA, 2,  2, 11, 0, 0); // A2  - MDIO
@@ -46,9 +51,7 @@ void ethernet_init() {
   gpio_port_mode(GPIOC, 1,  2, 11, 0, 0); // C1  - MDC
   gpio_port_mode(GPIOC, 4,  2, 11, 0, 0); // C4  - RXD0
   gpio_port_mode(GPIOC, 5,  2, 11, 0, 0); // C5  - RXD1
-#endif
-
-#ifdef NUCLEO
+#else
   gpio_port_mode(GPIOA, 1,  2, 11, 0, 0); // A1  - REF_CLK
   gpio_port_mode(GPIOA, 2,  2, 11, 0, 0); // A2  - MDIO
   gpio_port_mode(GPIOA, 7,  2, 11, 0, 0); // A7  - CRS_DV
@@ -141,9 +144,9 @@ void ethernet_main() {
   if(!server_ip_address[0] && !server_ip_address[1] && !server_ip_address[2] && !server_ip_address[3])
     return;
 
-  if(TIM2->CNT > previous_time) {
-    ethernet_udp_tx(server_ip_address, 1111, 2222, (uint8_t*)"hello", 5);
-    previous_time = TIM2->CNT;
+  if(TIM2->CNT > next_greeting) {
+    cloud_send_greeting();
+    next_greeting = TIM2->CNT + 10;
   }
 }
 
@@ -242,6 +245,9 @@ void ethernet_udp_rx(struct ip_packet_t* packet) {
   }
   if(NTOHS(udp->dport) == 5353) {
     ethernet_dns_rx((struct dns_message_t*)(udp->payload));
+  }
+  if(NTOHS(udp->dport) == 42424) {
+    cloud_rx((struct cloud_message_full_t*)(udp->payload));
   }
 }
 

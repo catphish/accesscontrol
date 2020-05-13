@@ -14,6 +14,7 @@ arm-none-eabi-gcc $CCOPTS -c util.c -o util.o
 arm-none-eabi-gcc $CCOPTS -c gpio.c -o gpio.o
 arm-none-eabi-gcc $CCOPTS -c cloud.c -o cloud.o
 arm-none-eabi-gcc $CCOPTS -c door.c -o door.o
+arm-none-eabi-gcc $CCOPTS -c rfid.c -o rfid.o
 arm-none-eabi-gcc $CCOPTS -c ethernet.c -o ethernet.o
 arm-none-eabi-gcc $CCOPTS -T STM32F439NIHx_FLASH.ld -Wl,--gc-sections *.o -o main.elf -lm
 #arm-none-eabi-gcc $CCOPTS -T STM32F407VGTx_FLASH.ld -Wl,--gc-sections *.o -o main.elf -lm

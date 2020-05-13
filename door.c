@@ -2,8 +2,9 @@
 #include "board.h"
 #include "gpio.h"
 #include "door.h"
+#include "util.h"
 
-int door_lock_at = 0;
+struct time_t door_lock_at;
 
 void door_init() {
 #ifdef PROD
@@ -17,15 +18,15 @@ void door_init() {
 }
 
 void door_main() {
-  if(door_lock_at && door_lock_at < TIM2->CNT) {
-    door_lock_at = 0;
+  if(door_lock_at.sec && time_passed(&door_lock_at)) {
+    door_lock_at.sec = 0;
     door_lock_now();
   }
 }
 
 void door_open_timed(int t) {
   door_open_now();
-  door_lock_at = TIM2->CNT + t;
+  time_set(&door_lock_at, 1, 0);
 }
 
 void door_open_now() {

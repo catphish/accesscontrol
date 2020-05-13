@@ -83,6 +83,7 @@ struct __attribute__((packed)) dns_message_t {
   uint8_t data[];
 };
 
+uint8_t ethernet_ready();
 void ethernet_init();
 void ethernet_rx();
 void ethernet_main();

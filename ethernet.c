@@ -10,16 +10,16 @@ uint8_t broadcast_ip[] = {0xff,0xff,0xff,0xff};
 uint8_t broadcast_mac[] = {0xff,0xff,0xff,0xff,0xff,0xff};
 uint8_t my_ip_address[]  = { 0,0,0,0 };
 uint8_t my_mac_address[] = { 2,0,0,0,0,1 };
-uint32_t dhcp_renew = 0;
-uint32_t dhcp_expiry = 0;
+struct time_t dhcp_renew;
+struct time_t dhcp_expiry;
 
 uint8_t gateway_ip_address[]  = { 0,0,0,0 };
 uint8_t gateway_mac_address[]  = { 0,0,0,0,0,0 };
-uint32_t gateway_arp_expiry = 0;
+struct time_t gateway_arp_expiry;
 
 uint8_t dns_ip_address[]  = { 0,0,0,0 };
 uint8_t server_ip_address[]  = { 0,0,0,0 };
-uint32_t dns_expiry = 0;
+struct time_t dns_expiry;
 
 char hostname[] = "\x05nutty\x02tk";
 int hostname_length = sizeof(hostname);
@@ -32,14 +32,14 @@ struct eth_frame_t tx_frame[2];
 struct dmadesc_t  tx_desc[2];
 struct dmadesc_t* tx_desc_p;
 
-uint32_t next_greeting = 0;
-uint8_t dhcp_state = 0;
+struct time_t next_greeting;
 uint32_t dhcp_request_xid = 0;
 
 void ethernet_init() {
   // Enable Ethernet
   gpio_port_mode(GPIOB, 14, 1, 0, 0, 0); // Ethernet Enable
   GPIOB->BSRR = (1<<14);
+
 
 #ifdef PROD
   gpio_port_mode(GPIOA, 1,  2, 11, 0, 0); // A1  - REF_CLK
@@ -99,6 +99,7 @@ void ethernet_init() {
   ETH->DMAOMR = (1 << 1) | (1 << 13) | (1<<21); // RXSTART, TXSTART
   ETH->MACCR |= (1 << 14) | (1 << 11) | (1 << 3) | (1 << 2);
   ETH->MACFFR |= (1 << 31);
+  time_set(&dhcp_renew, 2, 0);
 }
 
 void ethernet_main() {
@@ -107,15 +108,15 @@ void ethernet_main() {
 
   // Maintenance tasks
 
-  if(dhcp_renew < TIM2->CNT) {
+  if(time_passed(&dhcp_renew)) {
     // DHCP renewal due, send a new DISCOVER
-    if(dhcp_expiry < TIM2->CNT) {
+    if(time_passed(&dhcp_expiry)) {
       // DHCP expired, clear IP. Retry in 5 seconds.
       my_ip_address[0] = 0; my_ip_address[1] = 0; my_ip_address[1] = 0; my_ip_address[3] = 0;
-      dhcp_renew = TIM2->CNT + 5;
+      time_set(&dhcp_renew, 5, 0);
     } else {
       // DHCP not yet expired retry in 2 minutes
-      dhcp_renew = TIM2->CNT + 120;
+      time_set(&dhcp_renew, 120, 0);
     }
     ethernet_send_dhcp_discover();
     return;
@@ -124,19 +125,19 @@ void ethernet_main() {
   if(!my_ip_address[0] && !my_ip_address[1] && !my_ip_address[2] && !my_ip_address[3])
     return;
   
-  if(gateway_arp_expiry < TIM2->CNT) {
+  if(time_passed(&gateway_arp_expiry)) {
     // ARP expired, fetch a new value. Retry in 2 seconds, keep the old value anyway
     ethernet_send_gateway_arp();
-    gateway_arp_expiry = TIM2->CNT + 2;
+    time_set(&gateway_arp_expiry, 2, 0);
     return;
   }
   // If we don't have a gateway MAC yet, bail out!
   if(!gateway_mac_address[0] && !gateway_mac_address[1] && !gateway_mac_address[2] && !gateway_mac_address[3] && !gateway_mac_address[4] && !gateway_mac_address[5])
     return;
 
-  if(dns_expiry < TIM2->CNT) {
+  if(time_passed(&dns_expiry)) {
     // DNS expired, fetch a new value, retry in 5 seconds, keep the old value anyway
-    dns_expiry = TIM2->CNT + 5;
+    time_set(&dns_expiry, 5, 0);
     ethernet_send_dns();
     return;
   }
@@ -144,10 +145,21 @@ void ethernet_main() {
   if(!server_ip_address[0] && !server_ip_address[1] && !server_ip_address[2] && !server_ip_address[3])
     return;
 
-  if(TIM2->CNT > next_greeting) {
+  if(time_passed(&next_greeting)) {
     cloud_send_greeting();
-    next_greeting = TIM2->CNT + 10;
+    time_set(&next_greeting, 10, 0);
   }
+}
+
+uint8_t ethernet_ready() {
+  if(!my_ip_address[0] && !my_ip_address[1] && !my_ip_address[2] && !my_ip_address[3])
+    return 0;
+  else if(!gateway_mac_address[0] && !gateway_mac_address[1] && !gateway_mac_address[2] && !gateway_mac_address[3] && !gateway_mac_address[4] && !gateway_mac_address[5])
+    return 0;
+  else if(!server_ip_address[0] && !server_ip_address[1] && !server_ip_address[2] && !server_ip_address[3])
+    return 0;
+  else
+    return 1;
 }
 
 void ethernet_rx() {
@@ -211,7 +223,7 @@ void ethernet_arp_rx(struct arp_message_t* message) {
     // See if it has the IP of our gateway
     if(!memcmp(message->spa, gateway_ip_address, 4)) {
       memcpy(gateway_mac_address, message->sha, 6);
-      gateway_arp_expiry = TIM2->CNT + 60;
+      time_set(&gateway_arp_expiry, 60, 0);
     }
   }
 }
@@ -276,7 +288,7 @@ void ethernet_dns_rx(struct dns_message_t* message) {
       offset += 4;
       offset += 2;
       memcpy(server_ip_address, message->data+offset, 4);
-      dns_expiry = TIM2->CNT + 300;
+      time_set(&dns_expiry, 300, 0);
     }
   }
 }
@@ -394,9 +406,9 @@ void ethernet_dhcp_rx(struct dhcp_message_t* message) {
       memcpy(my_ip_address, message->yiaddr, 4);
       memcpy(gateway_ip_address, gateway, 4);
       memcpy(dns_ip_address, dns, 4);
-      dhcp_renew = TIM2->CNT + lease_time / 2;
-      dhcp_expiry = TIM2->CNT + lease_time;
-      gateway_arp_expiry = 0;
+      time_set(&dhcp_renew, lease_time / 2, 0);
+      time_set(&dhcp_expiry, lease_time, 0);
+      gateway_arp_expiry.sec = 0;
     }
   }
 }

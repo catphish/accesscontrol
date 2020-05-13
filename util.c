@@ -1,25 +1,27 @@
 #include "board.h"
+#include "util.h"
 
-void usleep(unsigned int delay) {
-  SysTick->LOAD = 0x00FFFFFF;
-  SysTick->VAL = 0;
-  SysTick->CTRL = 5;
-  while(0x00FFFFFF - SysTick->VAL < delay * 180);
+uint8_t time_passed(volatile struct time_t * t) {
+  if(TIM2->CNT < t->sec) return(0);
+  if(TIM2->CNT > t->sec) return(1);
+  if(TIM3->CNT > t->frac_sec) return(1);
+  return(0);
 }
 
-void msleep(unsigned int delay) {
-	for(int n=0; n<delay; n++) {
-		usleep(1000);
-	}
+void time_set(volatile struct time_t * t, uint32_t sec, uint32_t msec) {
+  t->sec = TIM2->CNT + sec + ((TIM3->CNT + msec * 10) / 10000);
+  t->frac_sec = (TIM3->CNT + msec * 10) % 10000;
 }
 
-// void blink(uint8_t color) {
-//   if(color == 0)
-//     GPIOB->ODR = (1<<0);
-//   if(color == 1)
-//     GPIOB->ODR = (1<<7);
-//   if(color == 2)
-//     GPIOB->ODR = (1<<14);
-//   msleep(20);
-//   GPIOB->ODR = 0;
-// }
+int memcmp_volatile(volatile uint8_t * str1, volatile uint8_t * str2, uint32_t count)
+{
+  while (count-- > 0)
+    if (*str1++ != *str2++)
+      return 1;
+  return 0;
+}
+
+void memset_volatile(volatile uint8_t * str, uint8_t val, uint32_t length) {
+  while( length -- > 0)
+   *str++ = val;
+}

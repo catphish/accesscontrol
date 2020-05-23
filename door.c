@@ -26,7 +26,7 @@ void door_main() {
 
 void door_open_timed(int t) {
   door_open_now();
-  time_set(&door_lock_at, 1, 0);
+  time_set(&door_lock_at, t, 0);
 }
 
 void door_open_now() {

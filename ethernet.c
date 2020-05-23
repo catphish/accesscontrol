@@ -21,7 +21,7 @@ uint8_t dns_ip_address[]  = { 0,0,0,0 };
 uint8_t server_ip_address[]  = { 0,0,0,0 };
 struct time_t dns_expiry;
 
-char hostname[] = "\x05nutty\x02tk";
+char hostname[] = "\x06""access""\x05""atech""\x02""io";
 int hostname_length = sizeof(hostname);
 
 struct eth_frame_t rx_frame[2];

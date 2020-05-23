@@ -6,26 +6,44 @@
 #include "util.h"
 #include "string.h"
 #include "ethernet.h"
+#include "cloud.h"
 
 volatile uint8_t card_in_bits[256];
 volatile uint8_t card_in_pos;
 volatile struct time_t card_in_timeout;
 
 void rfid_init() {
+#ifdef PROD
+  gpio_port_mode(GPIOA, 8,  0, 0, 0, 0); // RFID Magstripe Mode Clock
+  gpio_port_mode(GPIOA, 10, 0, 0, 0, 0); // RFID Magstripe Mode Data
+  SYSCFG->EXTICR[3-1] = SYSCFG_EXTICR3_EXTI8_PA;
+  EXTI->IMR  = (1<<8);
+  EXTI->FTSR = (1<<8);
+  NVIC->ISER[((uint32_t)(EXTI9_5_IRQn) >> 5)] = (1 << ((uint32_t)(EXTI9_5_IRQn) & 0x1F));
+#else
   gpio_port_mode(GPIOC, 11, 0, 0, 0, 0); // RFID Magstripe Mode Clock
   gpio_port_mode(GPIOC, 12, 0, 0, 0, 0); // RFID Magstripe Mode Data
   SYSCFG->EXTICR[3-1] = SYSCFG_EXTICR3_EXTI11_PC;
   EXTI->IMR  = (1<<11);
   EXTI->FTSR = (1<<11);
   NVIC->ISER[((uint32_t)(EXTI15_10_IRQn) >> 5)] = (1 << ((uint32_t)(EXTI15_10_IRQn) & 0x1F));
+#endif
   card_in_pos = 0;
   card_in_timeout.sec = 0;
 }
 static uint8_t start[] = {0,0,0,0,0,0,0,0,0,0,1,1,0,1,0};
 
 void handle_incoming_card(uint8_t * number, uint8_t length) {
-  if(length == 14)
-    door_open_timed(1);
+  uint8_t response_data[MESSAGE_DATA_SIZE];
+  memset(response_data, 0, MESSAGE_DATA_SIZE);
+  response_data[0] = length;
+  memcpy(response_data + 1, number, length);
+  if(cloud_check_card(number, length)) {
+    door_open_timed(2);
+    cloud_send_data(CLOUD_MESSAGE_TYPE_CARD_SUCCESS, response_data);
+  }
+  else
+    cloud_send_data(CLOUD_MESSAGE_TYPE_CARD_FAILURE, response_data);
 }
 
 void rfid_main() {
@@ -58,5 +76,10 @@ void rfid_main() {
 void EXTI15_10_IRQHandler() {
   card_in_bits[card_in_pos++] = !(GPIOC->IDR & (1<<12));
   EXTI->PR = (1<<11);
+  time_set(&card_in_timeout, 0, 100);
+}
+void EXTI9_5_IRQHandler() {
+  card_in_bits[card_in_pos++] = !(GPIOA->IDR & (1<<10));
+  EXTI->PR = (1<<8);
   time_set(&card_in_timeout, 0, 100);
 }

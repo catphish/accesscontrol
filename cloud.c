@@ -33,6 +33,7 @@ void cloud_send_greeting() {
 }
 
 void cloud_send_data(uint8_t message_type, uint8_t * data) {
+  if(!ethernet_ready()) return;
   struct cloud_message_full_t message;
   memset(&message, 0, sizeof(message));
   message.packet_type = message_type;
